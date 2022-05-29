@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+
 #define CHAR_SET_SIZE 256
 #define MAX_TREE_HEIGHT 100
 
@@ -244,19 +245,80 @@ void compact(char *filePath) {
 
     writer = fopen(strcat(filePath, ".comp"), "w");
 
-    char **compacted = (char **) malloc(sizeof(char *) * textSize);
-
-    printf("text size = %d\n", textSize);
-
-    for (int i = 0; i < textSize; i++) {
-        compacted[i] = charToCodeMap[(int) text[i]];
+    int textSizeInBits = 0;
+    for (int i = 0; i < symbolsUsed; i++) {
+        textSizeInBits += strlen(charToCodeMap[symbolsNonZero[i]]) * frequencyNonZero[i];
     }
 
+    char *compacted = (char *) malloc(sizeof(char *) * textSizeInBits);
+
+    for (int i = 0; i < textSize; i++) {
+        strcat(compacted, charToCodeMap[(int) text[i]]);
+    }
+
+    fprintf(writer, "%d\n", textSizeInBits);
+
+    for (int i = 0; i < symbolsUsed; i++) {
+        if (symbolsNonZero[i] == ' ') {
+            fprintf(writer, "%c %d ", '_', frequencyNonZero[i]);
+        } else if (symbolsNonZero[i] == '\n') {
+            fprintf(writer, "%c %d ", '|', frequencyNonZero[i]);
+        } else {
+            fprintf(writer, "%c %d ", symbolsNonZero[i], frequencyNonZero[i]);
+        }
+    }
+
+    fprintf(writer, "\n");
+
+    char *bin = (char *) malloc(sizeof(char) * 8);
+
+    for(int i = 0; i < textSizeInBits / 8; i++) {
+        strncpy(bin, compacted + i * 8, 8);
+        int c = strtol(bin, NULL, 2);
+        fprintf(writer, "%c", c);
+    }
+    
+    fclose(writer);
+
+    free(bin);
+    free(compacted);
     free(frequencyNonZero);
     free(symbolsNonZero);
 }
 
+void descompactBin(char *bin, int size, Node *root, FILE *writer) {
+    Node *it = root;
+    int ptr = 0;
+    char *msg = (char *) malloc(sizeof(char) * size);
+    
+    for (int i = 0; i < size; i++) {
+        if (bin[i] == '0') {
+            if (it->left) {
+                it = it->left;
+            }
+        } else if(bin[i] == '1') {
+            if (it->right) {
+                it = it->right;
+            }
+        }
+
+        if(!(it->left) && !(it->right)) {
+            msg[ptr++] = it->symbol;
+            it = root;
+        }
+    }
+    
+    fprintf(writer, "%s", msg);
+
+    fclose(writer);
+}
+
 void descompact(char *filePath) {
+    char line[1024];
+    int lineSize = 1024;
+    int symbolsUsed = 0, textSizeInBits = 0;
+    int frequency[CHAR_SET_SIZE] = {0};
+    char symbols[CHAR_SET_SIZE];
     printf("Descompacting file: %s\n", filePath);
 
     char *extension = strrchr(filePath, '.');
@@ -266,11 +328,114 @@ void descompact(char *filePath) {
     }
 
     reader = fopen(filePath, "r");
-    writer = fopen(strRemove(filePath, ".comp"), "w");
     if (reader == NULL) {
         printf("File %s does not exist\n", filePath);
         exit(6);
     }
+
+    fgets(line, sizeof(line), reader);
+    textSizeInBits = atoi(line);
+    // printf("%d\n", textSizeInBits);
+
+    fgets(line, sizeof(line), reader);
+
+    int i = 0;
+    while (line[i] != '\n') {
+        char symbol = line[i];
+
+        if (line[i + 1] != ' ') {
+            printf("Error in file %s\n", filePath);
+            exit(7);
+        }
+        
+        int startOfFreq = i + 2;
+        int endOfFreq = i + 2;
+        while (endOfFreq < lineSize) {
+            endOfFreq++;
+
+            if (line[endOfFreq] == ' ') {
+                break;
+            }
+        }
+
+        char *freq = (char *) malloc(sizeof(char) * (endOfFreq - startOfFreq + 1));
+        strncpy(freq, line + startOfFreq, endOfFreq - startOfFreq + 1);
+
+        int freqAsInt = atoi(freq);
+
+        if (symbol == '_') {
+            symbol = ' ';
+            int index = (int) symbol;
+            symbols[index] = symbol;
+            frequency[index] = freqAsInt;
+            symbolsUsed++;
+        } else if (symbol == '|') {
+            symbol = '\n';
+            int index = (int) symbol;
+            symbols[index] = symbol;
+            frequency[index] = freqAsInt;
+            symbolsUsed++;
+        } else {
+            int index = (int) symbol;
+            symbols[index] = symbol;
+            frequency[index] = freqAsInt;
+            symbolsUsed++;
+        }
+
+        i = endOfFreq + 1;
+    }
+
+    int *frequencyNonZero = (int *) malloc(sizeof(int) * symbolsUsed);
+    char *symbolsNonZero = (char *) malloc(sizeof(char) * symbolsUsed);
+
+    removeZeros(frequency, symbols, CHAR_SET_SIZE, frequencyNonZero, symbolsNonZero);
+
+    // for (int i = 0; i < symbolsUsed; i++) {
+    //     printf("%c %d\n", symbolsNonZero[i], frequencyNonZero[i]);
+    // }
+
+    // char **charToCodeMap = getCharToCodeMap(symbolsNonZero, frequencyNonZero, symbolsUsed);
+
+    // for (int i = 0; i < CHAR_SET_SIZE; i++) {
+    //     if (charToCodeMap[i] != NULL) {
+    //         printf("%c: %s\n", symbols[i], charToCodeMap[i]);
+    //     }
+    // }
+
+    char *msgBin, *msgComp;
+
+    msgBin = (char *) malloc(sizeof(char) * textSizeInBits);
+    msgComp = (char *) malloc(sizeof(char) * lineSize);
+
+    int lines = 1;
+    while (fgets(line, sizeof(line), reader)) {
+        if (lines > 1) {
+            msgComp = realloc(msgComp, sizeof(char) * lineSize * lines);
+        }
+
+        strcat(msgComp, line);
+
+        lines++;
+    }
+
+    i = 0;
+    do {
+        char ch = msgComp[i];
+
+        char *bin = (char *) malloc(sizeof(char) * 8);
+        for (int i = 7; i >= 0; i--) {
+            bin[7 - i] = (ch >> i) & 1 ? '1' : '0';
+        }
+
+        strcat(msgBin, bin);
+
+        i++;
+    } while(msgComp[i] != '\0');
+
+    Node *root = buildHuffmanTree(symbolsNonZero, frequencyNonZero, symbolsUsed);
+    writer = fopen(strcat(strRemove(filePath, ".comp"), ".descomp"), "w");
+
+    descompactBin(msgBin, textSizeInBits, root, writer);
 }
 
 int main(int argc, char *argv[]) {
